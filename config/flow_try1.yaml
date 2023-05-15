@@ -1,0 +1,15 @@
+resize: 1
+
+obs_len: 8
+pred_len: 12
+total_len: 20
+
+# model
+AF:
+  future_lens: 12
+  hidden_size: 32
+  output_sizes: [32, 4]
+diverse: 1
+
+# train
+lr: 0.01
