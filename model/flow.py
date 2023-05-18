@@ -22,38 +22,34 @@ class FlowNet(nn.Module):
 
         self.output_shape = (future_lens, 2)
 
-        self.hist_embedding = nn.Linear(self.output_shape[-1], input_embedding_size).cuda()
+        self.hist_embedding = nn.Linear(self.output_shape[-1], input_embedding_size)
         self.history_encoder = nn.LSTM(input_size=input_embedding_size,
-                                      hidden_size=hidden_size).cuda()
+                                      hidden_size=hidden_size)
 
-        # self._decoder = AutoregressiveFlow(
-        #         output_shape=self.output_shape,
-        #         hidden_size=hidden_size,
-        #         output_sizes=output_sizes
-        #     )
         self._decoder = AutoregressiveFlow(
                             output_shape=self.output_shape,
                             hidden_size=hidden_size,
                             output_sizes=output_sizes
-                        ).cuda()
+                        )
+        self._decoder = self._decoder.cuda()
 
 
-    def to(self, *args, **kwargs):
-        """Handles non-parameter tensors when moved to a new device."""
-        self = super().to(*args, **kwargs)
-        self._decoder = self._decoder.to(*args, **kwargs)
-        return self
+    # def to(self, *args, **kwargs):
+    #     """Handles non-parameter tensors when moved to a new device."""
+    #     self = super().to(*args, **kwargs)
+    #     self._decoder = self._decoder.to(*args, **kwargs)
+    #     return self
 
     def encode_history(self, history_tensor):
         assert (len(history_tensor.size()) == 3)
-        # (T, B, D)
-        hist_batch = history_tensor.transpose(0, 1)
-        output, (z, c) = self.history_encoder(F.leaky_relu(self.hist_embedding(hist_batch)))
+        hist_batch = history_tensor.transpose(0, 1)     # (obs_len, B, 2)
+        output, (z, c) = self.history_encoder(F.leaky_relu(self.hist_embedding(hist_batch)))        # output: (obs_len, B, 32)
+                                                                                                    # z: (1, B, 32)   c: (1, B, 32)
         return z[0]
 
     def forward(self, history_tensor, future_tensor):
-        y_tm1 = history_tensor[:, -1]
-        history_features = self.encode_history(history_tensor)
+        y_tm1 = history_tensor[:, -1]       # (B, 2)
+        history_features = self.encode_history(history_tensor)      # (B, 32)
         _, log_prob, logabsdet = self._decoder._inverse(y_tm1, y=future_tensor, z=history_features)
 
         return log_prob, logabsdet
@@ -70,10 +66,10 @@ class FlowNet(nn.Module):
         return agent_future_hat
 
     def predict_n(self, history_tensor, n=5, sigma=1.0):
-        y_tm1 = history_tensor[:, -1]
-        history_features = self.encode_history(history_tensor)
+        y_tm1 = history_tensor[:, -1]       # (B, 2)
+        history_features = self.encode_history(history_tensor)      # (B, 32)
 
-        y_tm1 = torch.repeat_interleave(y_tm1, repeats=n, dim=0)
-        history_features_n = torch.repeat_interleave(history_features, repeats=n, dim=0)
-        agent_future_hat = self._decoder.forward(y_tm1, history_features_n, sigma=sigma)
+        y_tm1 = torch.repeat_interleave(y_tm1, repeats=n, dim=0)        # (B*n, 2)
+        history_features_n = torch.repeat_interleave(history_features, repeats=n, dim=0)        # (B*n, 32)
+        agent_future_hat = self._decoder.forward(y_tm1, history_features_n, sigma=sigma)        # (B*n, pred_len, 2)
         return agent_future_hat

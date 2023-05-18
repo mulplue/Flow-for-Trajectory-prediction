@@ -56,14 +56,14 @@ class AutoregressiveFlow(nn.Module):
 
         Args:
           z: The contextual parameters of the conditional density estimator, with
-            shape `[B, K]`.
+            shape `[B*n, 32]`.
 
         Returns:
-          The sampels from the push-forward distribution, with shape `[B, D]`.
+          The sampels from the push-forward distribution, with shape `[B*n, pred_len, 2]`.
         """
         # Samples from the base distribution.
-        x = self._base_dist.sample_n(n=z.shape[0]) * sigma
-        x = x.reshape(-1, *self._output_shape)
+        x = self._base_dist.sample(sample_shape=(z.shape[0], )) * sigma    # (B*n, pred_len*2)
+        x = x.reshape(-1, *self._output_shape)    # (B*n, pred_len, 2)
 
         return self._forward(y_tm1, x, z)[0]
 
@@ -71,13 +71,13 @@ class AutoregressiveFlow(nn.Module):
         """Transforms samples from the base distribution to the data distribution.
 
         Args:
-          x: Samples from the base distribution, with shape `[B, D]`.
+          x: Samples from the base distribution, with shape `[B*n, pred_len, 2]`.
           z: The contextual parameters of the conditional density estimator, with
-            shape `[B, K]`.
+            shape `[B*n, 32]`.
 
         Returns:
           y: The sampels from the push-forward distribution,
-            with shape `[B, D]`.
+            with shape `[B*n, pred_len, 2]`.
           logabsdet: The log absolute determinant of the Jacobian,
             with shape `[B]`.
         """
@@ -93,18 +93,18 @@ class AutoregressiveFlow(nn.Module):
         # ).to(z.device)
 
         for t in range(x.shape[-2]):
-            x_t = x[:, t, :]
+            x_t = x[:, t, :]    # (B*n, 2)
 
             # Unrolls the GRU.
-            z = self._decoder(y_tm1, z)
+            z = self._decoder(y_tm1, z)   # (B*n, 2)
 
             # Predicts the location and scale of the MVN distribution.
             dloc_scale = self._locscale(z)
-            dloc = dloc_scale[..., :2]
-            scale = F.softplus(dloc_scale[..., 2:]) + 1e-6
+            dloc = dloc_scale[..., :2]    # (B*n, 2)
+            scale = F.softplus(dloc_scale[..., 2:]) + 1e-6    # (B*n, 2)
 
             # Data distribution corresponding sample.
-            y_t = (y_tm1 + dloc) + scale * x_t
+            y_t = (y_tm1 + dloc) + scale * x_t    # (B*n, 2)
 
             # Update containers.
             y.append(y_t)
@@ -112,12 +112,12 @@ class AutoregressiveFlow(nn.Module):
             y_tm1 = y_t
 
         # Prepare tensors, reshape to [B, T, 2].
-        y = torch.stack(y, dim=-2)
-        scales = torch.stack(scales, dim=-2)
+        y = torch.stack(y, dim=-2)    # (B*n, pred_len, 2)
+        scales = torch.stack(scales, dim=-2)    # (B*n, 2)
 
         # Log absolute determinant of Jacobian.
-        logabsdet = torch.log(torch.abs(torch.prod(scales, dim=-2)))
-        logabsdet = torch.sum(logabsdet, dim=-1)
+        logabsdet = torch.log(torch.abs(torch.prod(scales, dim=-2)))    # (B*n, 2)
+        logabsdet = torch.sum(logabsdet, dim=-1)    # (B*n, )
 
         return y, logabsdet
 
@@ -125,9 +125,9 @@ class AutoregressiveFlow(nn.Module):
         """Transforms samples from the data distribution to the base distribution.
 
         Args:
-          y: Samples from the data distribution, with shape `[B, D]`.
+          y: Samples from the data distribution, with shape `[B, obs_len, 2]`.
           z: The contextual parameters of the conditional density estimator, with shape
-            `[B, K]`.
+            `[B, 32]`.
 
         Returns:
           x: The sampels from the base distribution,
@@ -149,32 +149,32 @@ class AutoregressiveFlow(nn.Module):
         # ).to(z.device)
 
         for t in range(y.shape[-2]):
-            y_t = y[:, t, :]
+            y_t = y[:, t, :]    # (B, 2)
 
             # Unrolls the GRU.
             z = self._decoder(y_tm1, z)
 
             # Predicts the location and scale of the MVN distribution.
-            dloc_scale = self._locscale(z)
-            dloc = dloc_scale[..., :2]
-            scale = F.softplus(dloc_scale[..., 2:]) + 1e-6
+            dloc_scale = self._locscale(z)    # (B, 4)
+            dloc = dloc_scale[..., :2]    # (B, 2)
+            scale = F.softplus(dloc_scale[..., 2:]) + 1e-6    # (B, 2)
 
             # Base distribution corresponding sample.
-            x_t = (y_t - (y_tm1 + dloc)) / scale
+            x_t = (y_t - (y_tm1 + dloc)) / scale    # (B, 2)
 
             x.append(x_t)
             scales.append(scale)
             y_tm1 = y_t
 
         # Prepare tensors, reshape to [B, T, 2].
-        x = torch.stack(x, dim=-2)
-        scales = torch.stack(scales, dim=-2)
+        x = torch.stack(x, dim=-2)    # (B, obs_len, 2)
+        scales = torch.stack(scales, dim=-2)    # (B, 2)
 
         # Log likelihood under base distribution.
-        log_prob = self._base_dist.log_prob(x.view(x.shape[0], -1))
+        log_prob = self._base_dist.log_prob(x.view(x.shape[0], -1))   #(B, )
 
         # Log absolute determinant of Jacobian.
-        logabsdet = torch.log(torch.abs(torch.prod(scales, dim=-1)))
-        logabsdet = torch.sum(logabsdet, dim=-1)
+        logabsdet = torch.log(torch.abs(torch.prod(scales, dim=-1)))    # (B, obs_len)
+        logabsdet = torch.sum(logabsdet, dim=-1)    # (B, )
 
         return x, log_prob, logabsdet
