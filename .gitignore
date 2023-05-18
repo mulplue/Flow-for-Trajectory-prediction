@@ -2,5 +2,6 @@
 *.log
 
 data/
+test/
 wandb/
 checkpoint/
